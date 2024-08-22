@@ -304,3 +304,113 @@ if __name__ == "__main__":
     axs[0].set_ylabel('$\\rho (doublets)$')
     fig.tight_layout()
     plt.ion(); plt.show()
+
+    print('Look for genes that increase in expression in doublets but do not increase anywhere else')
+    fig =  plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    x = corrsd['DC']['rho'].fillna(0)
+    y = corrsd['T']['rho'].fillna(0)
+    z = corrsd['dou']['rho'].fillna(0)
+    cmap = plt.get_cmap('viridis')
+    delta = z - np.sqrt(x**2 + y**2)
+    c = cmap(delta - delta.min() / (delta.max() - delta.min()))
+    zz = np.linspace(-1, 1, 100)
+    ax.plot(zz * 0, zz * 0, zz, color='red', lw=2)
+    ax.scatter(x, y, zs=z, c=c, alpha=0.7)
+    ax.set_xlabel('DC corr')
+    ax.set_ylabel('T corr')
+    ax.set_zlabel('doublet corr')
+    fig.tight_layout()
+    plt.ion(); plt.show()
+
+    print('Plot a few genes over time to get a sense of what it is')
+    delta = z - np.sqrt(x**2 + y**2)
+    deltam = z + np.sqrt(x**2 + y**2)
+    genes2  = [delta.nlargest(6).index, deltam.nsmallest(6).index]
+    fig, axs = plt.subplots(2, 6, figsize=(18, 6), sharex=True)
+    for igt, (genes, axrow) in enumerate(zip(genes2, axs)):
+        axrow[0].set_ylabel('Expression [cpm]')
+        for gene, ax in zip(genes, axrow):
+            means = []
+            fracs = []
+            quartiles = []
+            for ib, (bs, be) in enumerate(bins):
+                idx = (time_dou >= bs) & (time_dou <= be)
+                datum = np.asarray(adata_dou[adata_dou.obs_names[idx], gene].X.todense()).T[0]
+                xi = xs[ib]
+                means.append(datum.mean())
+                fracs.append((datum > 0).mean())
+                quartile = np.percentile(datum, [10, 25, 50, 75, 90])
+                quartiles.append(quartile)
+            means = np.array(means)
+            quartiles = np.asarray(quartiles).T
+            ax.plot(xs, np.maximum(means, 1), color='r', marker='+')
+            ax2 = ax.twinx()
+            ax2.plot(xs, np.maximum(fracs, 0.01), color='steelblue', marker='*')
+            ax2.set_ylim([0.009, 1.01])
+            ax.bar(xs, quartiles[3], width=[(x[1] - x[0]) / 2 for x in bins], bottom=quartiles[1], ec='k', facecolor='grey', alpha=0.7)
+            ax.errorbar(xs, quartiles[2], yerr=np.array([quartiles[2] - quartiles[0], quartiles[4] - quartiles[2]]), color='k')
+            ax.grid(True)
+            ax.set_title(gene)
+            if igt == 1:
+                ax.set_xlabel('Time [mins]')
+    fig.tight_layout()
+    plt.ion(); plt.show()
+
+    print('Take genes that are highest in the late doublets')
+    adatad = {'T': adata_T, 'DC': adata_DC, 'dou':  adata_dou}
+    df_avg = pd.DataFrame([], index=adata_dou.var_names)
+    df_frac = pd.DataFrame([], index=adata_dou.var_names)
+    for ct,  adatai in adatad.items():
+        ts = adatai.obs['Timepoint(min)'].quantile([0, .33, .67, 1])
+        cut = pd.cut(adatai.obs['Timepoint(min)'], ts, labels=False, include_lowest=True)
+        for i in range(3):
+            cellsi = cut.loc[cut == i].index
+            df_avg[f'{ct}_{i+1}'] =  np.asarray(adatai[cellsi].X.mean(axis=0))[0]
+            df_frac[f'{ct}_{i+1}'] =  np.asarray((adatai[cellsi].X > 0).mean(axis=0))[0]
+
+    genes = (df_frac['dou_3'] - df_frac.iloc[:, :6].max(axis=1)).nlargest(12).index
+    colors = {'T':  ['yellow', 'gold', 'orange'], 'DC': ['steelblue', 'cornflowerblue', 'navy'], 'dou': ['lightgreen', 'forestgreen', 'darkgreen']}
+    x = np.arange(9)
+    colors = colors['T'] + colors['DC'] + colors['dou']
+    fig, axs = plt.subplots(2, 6, figsize=(18, 6), sharex=True, sharey=True)
+    axs = axs.ravel()
+    for i,  (gene, ax) in enumerate(zip(genes, axs)):
+        y  = df_avg.loc[gene]
+        ax.bar(x, y +  0.5, color=colors)
+        ax.set_xticks(x)
+        if i >= len(genes) // 2:
+            ax.set_xticklabels(df_avg.columns, rotation=90)
+        ax.grid(True)
+        ax.set_title(gene)
+        ax.set_ylim(0.4,  1e4)
+        ax.set_yscale('log')
+        ax2 = ax.twinx()
+        y2  = df_frac.loc[gene]
+        ax2.plot(x, y2, lw=2, color='k')
+        ax2.set_ylim(0, 1)
+    fig.tight_layout()
+    plt.ion(); plt.show()
+
+    crit1 = np.log2(df_avg['dou_3'] + 0.5) - np.log2(df_avg.iloc[:, :6].max(axis=1) + 0.5)
+    crit2 = (df_frac['dou_3'] - df_frac.iloc[:, :6].max(axis=1))
+    r = np.sqrt(crit1**2 + crit2**2)
+    fig, ax = plt.subplots()
+    ax.scatter(crit1, crit2, color='k', alpha=0.5)
+    for gene in r.nlargest(200).index:
+        ax.text(crit1.loc[gene], crit2.loc[gene], gene, ha='center', va='bottom')
+    ax.grid(True)
+    fig.tight_layout()
+    plt.ion(); plt.show()
+
+    print('Not all doublets are born equal: find which ones are most promising')
+    # count the number of genes uniquely expressed in each doublet
+    adatad = {'T': adata_T, 'DC': adata_DC, 'dou':  adata_dou}
+    df_frac = pd.DataFrame([], index=adata_dou.var_names)
+    for ct,  adatai in adatad.items():
+        ts = adatai.obs['Timepoint(min)'].quantile([0, .33, .67, 1])
+        df_frac[ct] =  np.asarray((adatai.X > 0).mean(axis=0))[0]
+
+    genes_cands = df_frac.index[df_frac[['T', 'DC']].max(axis=1) == 0]
+    genes_new = pd.Series(np.asarray((adata_dou[:, genes_cands].X > 0).any(axis=0))[0], index=adata_dou.var_names)
+    n_new = pd.Series(np.asarray((adata_dou[:, genes_cands].X > 0).sum(axis=1))[:, 0], index=adata_dou.obs_names)
