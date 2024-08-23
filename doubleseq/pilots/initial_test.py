@@ -412,5 +412,36 @@ if __name__ == "__main__":
         df_frac[ct] =  np.asarray((adatai.X > 0).mean(axis=0))[0]
 
     genes_cands = df_frac.index[df_frac[['T', 'DC']].max(axis=1) == 0]
-    genes_new = pd.Series(np.asarray((adata_dou[:, genes_cands].X > 0).any(axis=0))[0], index=adata_dou.var_names)
+    genes_new = pd.Series(np.asarray((adata_dou[:, genes_cands].X > 0).sum(axis=0))[0], index=genes_cands)
+    genes_new = genes_new.loc[genes_new > 0]
     n_new = pd.Series(np.asarray((adata_dou[:, genes_cands].X > 0).sum(axis=1))[:, 0], index=adata_dou.obs_names)
+
+    print('Clustermap of the doublets for the genes that matter')
+    from scipy.spatial.distance import pdist    
+    from scipy.cluster.hierarchy import linkage, leaves_list
+    from scipy.stats import zscore
+    gs = list(genes_new.sort_values(ascending=False).index[:30]) + []
+    dhdf = pd.DataFrame(np.asarray(adata_dou[:, gs].X.todense()), index=adata_dou.obs_names, columns=gs)
+
+    dhdf_nz = dhdf.loc[dhdf.sum(axis=1) >  0]
+    zscore_cells = zscore(np.log1p(dhdf_nz.values), axis=0)
+    pdis = pdist(zscore_cells)
+    Z = linkage(pdis, method='average', optimal_ordering=True)
+
+    zscore_genes = zscore(np.log1p(dhdf_nz.values).T, axis=0)
+    pdisT = pdist(zscore_genes)
+    ZT = linkage(pdisT, method='average', optimal_ordering=True)
+
+    g = sns.clustermap(
+        np.log1p(dhdf_nz),
+        row_linkage=Z,
+        col_linkage=ZT,
+        yticklabels=True,
+    )
+
+    print('Plot presence/absence matrix, perhaps clearer')
+    g = sns.clustermap(
+        (dhdf_nz > 0),
+        yticklabels=True,
+        xticklabels=True,
+    )
